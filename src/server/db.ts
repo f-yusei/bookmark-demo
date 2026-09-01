@@ -9,6 +9,7 @@ export type BookmarkRow = {
   title: string;
   tags: string;
   memo: string;
+  ogp_image_url?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -18,6 +19,7 @@ export type BookmarkInput = {
   title: string;
   tags: string;
   memo: string;
+  ogpImageUrl: string;
 };
 
 export type BookmarkPage = {
@@ -39,6 +41,7 @@ const toBookmark = (row: BookmarkRow): Bookmark => ({
   title: row.title,
   tags: row.tags,
   memo: row.memo,
+  ogpImageUrl: row.ogp_image_url ?? "",
   createdAt: row.created_at,
   updatedAt: row.updated_at
 });
@@ -92,7 +95,7 @@ export class BookmarkDatabase {
     const offset = (page - 1) * pageSize;
     const rows = this.db
       .prepare(
-        `SELECT id, url, title, tags, memo, created_at, updated_at FROM bookmarks ${searchFilter.sql} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+        `SELECT id, url, title, tags, memo, ogp_image_url, created_at, updated_at FROM bookmarks ${searchFilter.sql} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       )
       .all(...searchFilter.bindings, pageSize, offset)
       .map(rowToBookmarkRow);
@@ -110,9 +113,9 @@ export class BookmarkDatabase {
     const now = new Date().toISOString();
     const row = this.db
       .prepare(
-        "INSERT INTO bookmarks (url, title, tags, memo, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, url, title, tags, memo, created_at, updated_at"
+        "INSERT INTO bookmarks (url, title, tags, memo, ogp_image_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, url, title, tags, memo, ogp_image_url, created_at, updated_at"
       )
-      .get(input.url, input.title, input.tags, input.memo, now, now);
+      .get(input.url, input.title, input.tags, input.memo, input.ogpImageUrl, now, now);
 
     if (!row) {
       throw new Error("Failed to create bookmark.");
@@ -125,9 +128,9 @@ export class BookmarkDatabase {
     const now = new Date().toISOString();
     const row = this.db
       .prepare(
-        "UPDATE bookmarks SET url = ?, title = ?, tags = ?, memo = ?, updated_at = ? WHERE id = ? RETURNING id, url, title, tags, memo, created_at, updated_at"
+        "UPDATE bookmarks SET url = ?, title = ?, tags = ?, memo = ?, ogp_image_url = ?, updated_at = ? WHERE id = ? RETURNING id, url, title, tags, memo, ogp_image_url, created_at, updated_at"
       )
-      .get(input.url, input.title, input.tags, input.memo, now, id);
+      .get(input.url, input.title, input.tags, input.memo, input.ogpImageUrl, now, id);
 
     return row ? toBookmark(rowToBookmarkRow(row)) : null;
   }

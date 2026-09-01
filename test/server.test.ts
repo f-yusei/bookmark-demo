@@ -8,14 +8,15 @@ import { BookmarkDatabase } from "../src/server/db";
 let tempDir: string;
 let db: BookmarkDatabase;
 
-const createTestApp = () => createApp({ db });
+const createTestApp = () => createApp({ db, storageDir: tempDir });
 
 const addBookmark = (input: { url: string; title: string; tags?: string; memo?: string }) =>
   db.createBookmark({
     url: input.url,
     title: input.title,
     tags: input.tags ?? "",
-    memo: input.memo ?? ""
+    memo: input.memo ?? "",
+    ogpImageUrl: ""
   });
 
 beforeEach(async () => {
@@ -153,5 +154,90 @@ describe("local server bookmarks API", () => {
     });
     expect(deleted.status).toBe(204);
     expect(missing.status).toBe(404);
+  });
+
+  it("downloads and stores OGP image on bookmark creation and serves it via /ogp/:name", async () => {
+    const pageHtml = `
+      <html>
+        <head>
+          <title>Page title</title>
+          <meta property="og:image" content="https://example.com/some-image.png" />
+        </head>
+      </html>
+    `;
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const urlStr = url.toString();
+        if (urlStr === "https://example.com/ogp-page") {
+          return new Response(pageHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (urlStr === "https://example.com/some-image.png") {
+          return new Response(imageBytes, { headers: { "content-type": "image/png", "content-length": "8" } });
+        }
+        return new Response(null, { status: 404 });
+      })
+    );
+
+    const app = createTestApp();
+    const response = await app.request("http://localhost/api/bookmarks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/ogp-page" })
+    });
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as { bookmark: { ogpImageUrl: string } };
+    expect(body.bookmark.ogpImageUrl).toMatch(/^\/ogp\/[a-f0-9-]+\.png$/);
+
+    // Now request the OGP image
+    const ogpName = body.bookmark.ogpImageUrl.replace("/ogp/", "");
+    const ogpResponse = await app.request(`http://localhost/ogp/${ogpName}`);
+    expect(ogpResponse.status).toBe(200);
+    expect(ogpResponse.headers.get("content-type")).toBe("image/png");
+    expect(ogpResponse.headers.get("cache-control")).toBe("public, max-age=86400, immutable");
+
+    const returnedBytes = new Uint8Array(await ogpResponse.arrayBuffer());
+    expect(returnedBytes).toEqual(imageBytes);
+
+    // Invalid traversal request
+    const traversalResponse = await app.request(`http://localhost/ogp/..%2fserver.test.ts`);
+    expect(traversalResponse.status).toBe(400);
+
+    // Non-existent image request
+    const missingResponse = await app.request(`http://localhost/ogp/missing-image.png`);
+    expect(missingResponse.status).toBe(404);
+  });
+
+  it("creates a bookmark successfully even if OGP image download fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const urlStr = url.toString();
+        if (urlStr === "https://example.com/fail-ogp") {
+          return new Response(
+            `<html><head><meta property="og:image" content="https://example.com/broken.png" /></head></html>`,
+            { headers: { "content-type": "text/html" } }
+          );
+        }
+        if (urlStr === "https://example.com/broken.png") {
+          return new Response(null, { status: 500 });
+        }
+        return new Response(null, { status: 404 });
+      })
+    );
+
+    const app = createTestApp();
+    const response = await app.request("http://localhost/api/bookmarks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/fail-ogp" })
+    });
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as { bookmark: { ogpImageUrl: string } };
+    expect(body.bookmark.ogpImageUrl).toBe("");
   });
 });

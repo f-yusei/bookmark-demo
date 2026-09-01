@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp } from "./app";
@@ -18,7 +18,8 @@ const port = Number(process.env.PORT ?? "8787");
 const db = new BookmarkDatabase(dbPath);
 db.migrate(migrationsDir);
 
-const app = createApp({ db });
+const storageDir = dirname(dbPath);
+const app = createApp({ db, storageDir });
 
 if (existsSync(clientDir)) {
   app.use("/*", serveStatic({ root: clientDir }));

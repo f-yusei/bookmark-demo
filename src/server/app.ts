@@ -1,10 +1,14 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import type { BookmarkDatabase } from "./db";
 import type { CreateBookmarkRequest, UpdateBookmarkRequest } from "../shared/bookmarks";
 import { fetchPageTitle, normalizeUrl } from "./title";
+import { storeOgpImage } from "./storage";
 
 export type AppDependencies = {
   db: BookmarkDatabase;
+  storageDir: string;
 };
 
 const PAGE_SIZE = 10;
@@ -68,7 +72,7 @@ const buildSearchFilter = (terms: string[]) => {
 const isUniqueError = (error: unknown) =>
   error instanceof Error && error.message.toLowerCase().includes("unique");
 
-export const createApp = ({ db }: AppDependencies) => {
+export const createApp = ({ db, storageDir }: AppDependencies) => {
   const app = new Hono();
 
   app.get("/api/bookmarks", (c) => {
@@ -104,9 +108,10 @@ export const createApp = ({ db }: AppDependencies) => {
     const tags = cleanTags((payload as CreateBookmarkRequest).tags);
     const memo = cleanText((payload as CreateBookmarkRequest).memo);
     const title = (await fetchPageTitle(url)) ?? url;
+    const ogpImageUrl = await storeOgpImage(url, storageDir);
 
     try {
-      const bookmark = db.createBookmark({ url, title, tags, memo });
+      const bookmark = db.createBookmark({ url, title, tags, memo, ogpImageUrl });
       return c.json({ bookmark }, 201);
     } catch (error) {
       if (isUniqueError(error)) {
@@ -146,9 +151,10 @@ export const createApp = ({ db }: AppDependencies) => {
     const tags = cleanTags((payload as UpdateBookmarkRequest).tags);
     const memo = cleanText((payload as UpdateBookmarkRequest).memo);
     const title = (await fetchPageTitle(url)) ?? url;
+    const ogpImageUrl = await storeOgpImage(url, storageDir);
 
     try {
-      const bookmark = db.updateBookmark(id, { url, title, tags, memo });
+      const bookmark = db.updateBookmark(id, { url, title, tags, memo, ogpImageUrl });
       if (!bookmark) {
         return c.json({ error: "Bookmark not found." }, 404);
       }
@@ -174,6 +180,40 @@ export const createApp = ({ db }: AppDependencies) => {
     }
 
     return c.body(null, 204);
+  });
+
+  app.get("/ogp/:name", async (c) => {
+    const name = c.req.param("name");
+
+    // Prevent directory traversal
+    if (name.includes("..") || name.includes("/") || name.includes("\\")) {
+      return c.json({ error: "Invalid image name." }, 400);
+    }
+
+    const filepath = join(storageDir, "ogp", name);
+    if (!existsSync(filepath)) {
+      return c.json({ error: "Image not found." }, 404);
+    }
+
+    const extension = name.split(".").pop()?.toLowerCase() ?? "";
+    const mimeTypes: Record<string, string> = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      webp: "image/webp",
+      gif: "image/gif",
+      avif: "image/avif"
+    };
+    const contentType = mimeTypes[extension] || "application/octet-stream";
+
+    try {
+      const imageBuffer = readFileSync(filepath);
+      c.header("Content-Type", contentType);
+      c.header("Cache-Control", "public, max-age=86400, immutable");
+      return c.body(imageBuffer);
+    } catch {
+      return c.json({ error: "Failed to read image." }, 500);
+    }
   });
 
   return app;

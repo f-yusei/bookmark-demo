@@ -8,7 +8,7 @@ const decodeHtmlEntities = (value: string) =>
     .replaceAll("&apos;", "'");
 
 const getAttribute = (tagContent: string, attrName: string): string | null => {
-  const pattern = new RegExp(`\\b${attrName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i");
+  const pattern = new RegExp(`(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i");
   const match = tagContent.match(pattern);
   if (!match) return null;
   return match[1] ?? match[2] ?? match[3] ?? null;

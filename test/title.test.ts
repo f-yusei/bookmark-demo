@@ -69,6 +69,14 @@ describe("fetchPageTitle", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it("rejects reserved IPv4 and IPv6 URL targets before fetching", async () => {
+    const fetcher = vi.fn(async () => new Response("<title>Reserved</title>"));
+
+    await expect(fetchPageTitle("http://192.0.2.1", fetcher as typeof fetch)).resolves.toBeNull();
+    await expect(fetchPageTitle("http://[2001:db8::1]", fetcher as typeof fetch)).resolves.toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("does not follow redirects to private URL targets", async () => {
     const fetcher = vi.fn(async () => new Response(null, {
       status: 302,

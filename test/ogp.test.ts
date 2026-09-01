@@ -22,6 +22,11 @@ describe("extractOgImageUrl", () => {
     expect(extractOgImageUrl(html, baseUrl)).toBe("https://images.example.com/pic.png");
   });
 
+  it("does not confuse data-* attributes with property or content", () => {
+    const html = `<meta data-property="og:image" property="og:image" data-content="https://wrong.example/pic.png" content="https://images.example.com/pic.png">`;
+    expect(extractOgImageUrl(html, baseUrl)).toBe("https://images.example.com/pic.png");
+  });
+
   it("resolves relative og:image URL against baseUrl", () => {
     const html = `<html><head><meta property="og:image" content="/images/pic.png" /></head></html>`;
     expect(extractOgImageUrl(html, baseUrl)).toBe("https://example.com/images/pic.png");
@@ -80,16 +85,9 @@ describe("storeOgpImage", () => {
       headers: { "content-type": "image/png", "content-length": "4" }
     });
 
-    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
-      const urlStr = url.toString();
-      if (urlStr === "https://example.com/page") {
-        return htmlResponse;
-      }
-      if (urlStr === "https://example.com/img.png") {
-        return imageResponse;
-      }
-      throw new Error(`Unexpected url: ${urlStr}`);
-    });
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(htmlResponse)
+      .mockResolvedValueOnce(imageResponse);
 
     const result = await storeOgpImage("https://example.com/page", tempStorageDir, fetcher as typeof fetch);
     
@@ -98,6 +96,27 @@ describe("storeOgpImage", () => {
     const localPath = join(tempStorageDir, "ogp", savedFilename);
     expect(existsSync(localPath)).toBe(true);
     expect(readFileSync(localPath)).toEqual(Buffer.from(imageBytes));
+  });
+
+  it("resolves a relative image URL against the final page response URL", async () => {
+    const htmlResponse = new Response("<meta property='og:image' content='../images/pic.png'>", {
+      headers: { "content-type": "text/html" }
+    });
+    Object.defineProperty(htmlResponse, "url", { value: "https://cdn.example.com/articles/post/" });
+    const imageResponse = new Response(new Uint8Array([1]), {
+      headers: { "content-type": "image/png", "content-length": "1" }
+    });
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(htmlResponse)
+      .mockResolvedValueOnce(imageResponse);
+
+    await expect(storeOgpImage("https://example.com/start", tempStorageDir, fetcher as typeof fetch))
+      .resolves.toMatch(/^\/ogp\/[a-f0-9-]+\.png$/);
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      "https://cdn.example.com/articles/images/pic.png",
+      expect.any(Object)
+    );
   });
 
   it("returns empty string if content-type is not text/html", async () => {

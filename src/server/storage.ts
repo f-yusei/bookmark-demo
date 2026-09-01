@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fetchWithTimeout, readLimitedBody } from "./fetch";
@@ -13,6 +13,20 @@ const ALLOWED_MIME_TYPES: Record<string, string> = {
 };
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+const STORED_OGP_PATH = /^\/ogp\/([a-f0-9-]+\.(?:png|jpeg|webp|gif|avif))$/;
+
+export const deleteOgpImage = (ogpImageUrl: string, storageDir: string) => {
+  const match = ogpImageUrl.match(STORED_OGP_PATH);
+  if (!match) {
+    return;
+  }
+
+  try {
+    rmSync(join(storageDir, "ogp", match[1]), { force: true });
+  } catch {
+    // OGP cleanup is best-effort and must not invalidate a completed database operation.
+  }
+};
 
 /**
  * ページの OGP 画像を取得し、ローカルの指定されたディレクトリに保存します。
@@ -61,7 +75,7 @@ export const storeOgpImage = async (
     const html = new TextDecoder().decode(htmlBody);
 
     // 4. og:image の URL を抽出
-    const imageUrl = extractOgImageUrl(html, pageUrl);
+    const imageUrl = extractOgImageUrl(html, response.url || pageUrl);
     if (!imageUrl) {
       return "";
     }

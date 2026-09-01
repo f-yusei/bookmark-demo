@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,13 +11,13 @@ let db: BookmarkDatabase;
 
 const createTestApp = () => createApp({ db, storageDir: tempDir });
 
-const addBookmark = (input: { url: string; title: string; tags?: string; memo?: string }) =>
+const addBookmark = (input: { url: string; title: string; tags?: string; memo?: string; ogpImageUrl?: string }) =>
   db.createBookmark({
     url: input.url,
     title: input.title,
     tags: input.tags ?? "",
     memo: input.memo ?? "",
-    ogpImageUrl: ""
+    ogpImageUrl: input.ogpImageUrl ?? ""
   });
 
 beforeEach(async () => {
@@ -167,19 +168,16 @@ describe("local server bookmarks API", () => {
     `;
     const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: RequestInfo | URL) => {
-        const urlStr = url.toString();
-        if (urlStr === "https://example.com/ogp-page") {
-          return new Response(pageHtml, { headers: { "content-type": "text/html" } });
-        }
-        if (urlStr === "https://example.com/some-image.png") {
-          return new Response(imageBytes, { headers: { "content-type": "image/png", "content-length": "8" } });
-        }
-        return new Response(null, { status: 404 });
-      })
-    );
+    const responses = new Map([
+      ["https://example.com/ogp-page", new Response(pageHtml, { headers: { "content-type": "text/html" } })],
+      [
+        "https://example.com/some-image.png",
+        new Response(imageBytes, { headers: { "content-type": "image/png", "content-length": "8" } })
+      ]
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) =>
+      responses.get(url.toString())?.clone() ?? new Response(null, { status: 404 })
+    ));
 
     const app = createTestApp();
     const response = await app.request("http://localhost/api/bookmarks", {
@@ -211,23 +209,97 @@ describe("local server bookmarks API", () => {
     expect(missingResponse.status).toBe(404);
   });
 
+  it("keeps OGP files synchronized when updating and deleting a bookmark", async () => {
+    const oldImageUrl = "/ogp/00000000-0000-4000-8000-000000000000.png";
+    const oldImagePath = join(tempDir, oldImageUrl);
+    mkdirSync(join(tempDir, "ogp"), { recursive: true });
+    writeFileSync(oldImagePath, new Uint8Array([1]));
+    const bookmark = addBookmark({
+      url: "https://example.com/old-image",
+      title: "Old image",
+      ogpImageUrl: oldImageUrl
+    });
+    const pageHtml = `<title>New image</title><meta property="og:image" content="https://example.com/new.png">`;
+    const responses = new Map([
+      ["https://example.com/new-image", new Response(pageHtml, { headers: { "content-type": "text/html" } })],
+      [
+        "https://example.com/new.png",
+        new Response(new Uint8Array([2]), { headers: { "content-type": "image/png", "content-length": "1" } })
+      ]
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) =>
+      responses.get(url.toString())?.clone() ?? new Response(null, { status: 404 })
+    ));
+    const app = createTestApp();
+
+    const updated = await app.request(`http://localhost/api/bookmarks/${bookmark.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/new-image" })
+    });
+    const body = await updated.json() as { bookmark: { ogpImageUrl: string } };
+
+    expect(updated.status).toBe(200);
+    expect(existsSync(oldImagePath)).toBe(false);
+    expect(existsSync(join(tempDir, body.bookmark.ogpImageUrl))).toBe(true);
+
+    const deleted = await app.request(`http://localhost/api/bookmarks/${bookmark.id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(204);
+    expect(existsSync(join(tempDir, body.bookmark.ogpImageUrl))).toBe(false);
+  });
+
+  it("removes a newly stored OGP file when bookmark creation or update fails", async () => {
+    const existingImageUrl = "/ogp/00000000-0000-4000-8000-000000000000.png";
+    mkdirSync(join(tempDir, "ogp"), { recursive: true });
+    writeFileSync(join(tempDir, existingImageUrl), new Uint8Array([1]));
+    const bookmark = addBookmark({
+      url: "https://example.com/original",
+      title: "Original",
+      ogpImageUrl: existingImageUrl
+    });
+    addBookmark({ url: "https://example.com/duplicate", title: "Duplicate" });
+    const pageHtml = `<title>Duplicate</title><meta property="og:image" content="https://example.com/new.png">`;
+    const responses = new Map([
+      ["https://example.com/duplicate", new Response(pageHtml, { headers: { "content-type": "text/html" } })],
+      [
+        "https://example.com/new.png",
+        new Response(new Uint8Array([2]), { headers: { "content-type": "image/png", "content-length": "1" } })
+      ]
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) =>
+      responses.get(url.toString())?.clone() ?? new Response(null, { status: 404 })
+    ));
+    const app = createTestApp();
+    const request = {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/duplicate" })
+    };
+
+    const createResponse = await app.request("http://localhost/api/bookmarks", { method: "POST", ...request });
+    const updateResponse = await app.request(`http://localhost/api/bookmarks/${bookmark.id}`, {
+      method: "PUT",
+      ...request
+    });
+
+    expect(createResponse.status).toBe(409);
+    expect(updateResponse.status).toBe(409);
+    expect(readdirSync(join(tempDir, "ogp"))).toEqual([existingImageUrl.replace("/ogp/", "")]);
+  });
+
   it("creates a bookmark successfully even if OGP image download fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: RequestInfo | URL) => {
-        const urlStr = url.toString();
-        if (urlStr === "https://example.com/fail-ogp") {
-          return new Response(
-            `<html><head><meta property="og:image" content="https://example.com/broken.png" /></head></html>`,
-            { headers: { "content-type": "text/html" } }
-          );
-        }
-        if (urlStr === "https://example.com/broken.png") {
-          return new Response(null, { status: 500 });
-        }
-        return new Response(null, { status: 404 });
-      })
-    );
+    const responses = new Map([
+      [
+        "https://example.com/fail-ogp",
+        new Response(
+          `<html><head><meta property="og:image" content="https://example.com/broken.png" /></head></html>`,
+          { headers: { "content-type": "text/html" } }
+        )
+      ],
+      ["https://example.com/broken.png", new Response(null, { status: 500 })]
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) =>
+      responses.get(url.toString())?.clone() ?? new Response(null, { status: 404 })
+    ));
 
     const app = createTestApp();
     const response = await app.request("http://localhost/api/bookmarks", {

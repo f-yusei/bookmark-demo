@@ -109,6 +109,16 @@ export class BookmarkDatabase {
     };
   }
 
+  getBookmark(id: number): Bookmark | null {
+    const row = this.db
+      .prepare(
+        "SELECT id, url, title, tags, memo, ogp_image_url, created_at, updated_at FROM bookmarks WHERE id = ?"
+      )
+      .get(id);
+
+    return row ? toBookmark(rowToBookmarkRow(row)) : null;
+  }
+
   createBookmark(input: BookmarkInput): Bookmark {
     const now = new Date().toISOString();
     const row = this.db

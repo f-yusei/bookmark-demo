@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import type { BookmarkDatabase } from "./db";
 import type { CreateBookmarkRequest, UpdateBookmarkRequest } from "../shared/bookmarks";
 import { fetchPageTitle, normalizeUrl } from "./title";
-import { storeOgpImage } from "./storage";
+import { deleteOgpImage, storeOgpImage } from "./storage";
 
 export type AppDependencies = {
   db: BookmarkDatabase;
@@ -114,6 +114,8 @@ export const createApp = ({ db, storageDir }: AppDependencies) => {
       const bookmark = db.createBookmark({ url, title, tags, memo, ogpImageUrl });
       return c.json({ bookmark }, 201);
     } catch (error) {
+      deleteOgpImage(ogpImageUrl, storageDir);
+
       if (isUniqueError(error)) {
         return c.json({ error: "This URL is already bookmarked." }, 409);
       }
@@ -148,6 +150,11 @@ export const createApp = ({ db, storageDir }: AppDependencies) => {
       return c.json({ error: error instanceof Error ? error.message : "Invalid URL." }, 400);
     }
 
+    const previousBookmark = db.getBookmark(id);
+    if (!previousBookmark) {
+      return c.json({ error: "Bookmark not found." }, 404);
+    }
+
     const tags = cleanTags((payload as UpdateBookmarkRequest).tags);
     const memo = cleanText((payload as UpdateBookmarkRequest).memo);
     const title = (await fetchPageTitle(url)) ?? url;
@@ -156,11 +163,20 @@ export const createApp = ({ db, storageDir }: AppDependencies) => {
     try {
       const bookmark = db.updateBookmark(id, { url, title, tags, memo, ogpImageUrl });
       if (!bookmark) {
+        deleteOgpImage(ogpImageUrl, storageDir);
         return c.json({ error: "Bookmark not found." }, 404);
+      }
+
+      if (previousBookmark.ogpImageUrl !== ogpImageUrl) {
+        deleteOgpImage(previousBookmark.ogpImageUrl, storageDir);
       }
 
       return c.json({ bookmark });
     } catch (error) {
+      if (previousBookmark.ogpImageUrl !== ogpImageUrl) {
+        deleteOgpImage(ogpImageUrl, storageDir);
+      }
+
       if (isUniqueError(error)) {
         return c.json({ error: "This URL is already bookmarked." }, 409);
       }
@@ -175,9 +191,16 @@ export const createApp = ({ db, storageDir }: AppDependencies) => {
       return c.json({ error: "Bookmark not found." }, 404);
     }
 
+    const bookmark = db.getBookmark(id);
+    if (!bookmark) {
+      return c.json({ error: "Bookmark not found." }, 404);
+    }
+
     if (!db.deleteBookmark(id)) {
       return c.json({ error: "Bookmark not found." }, 404);
     }
+
+    deleteOgpImage(bookmark.ogpImageUrl, storageDir);
 
     return c.body(null, 204);
   });

@@ -1,59 +1,59 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_REDIRECTS = 3;
 
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata", "metadata.google.internal"]);
+const BLOCKED_ADDRESSES = new BlockList();
 
-const parseIPv4 = (value: string) => {
-  const parts = value.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return null;
-  }
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4]
+] as const) {
+  BLOCKED_ADDRESSES.addSubnet(network, prefix, "ipv4");
+}
 
-  return parts;
-};
-
-const isBlockedIPv4 = (value: string) => {
-  const parts = parseIPv4(value);
-  if (!parts) {
-    return true;
-  }
-
-  const [a, b] = parts;
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    a >= 224
-  );
-};
-
-const isBlockedIPv6 = (value: string) => {
-  const normalized = value.toLowerCase();
-  return (
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("fe80:") ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd")
-  );
-};
+for (const [network, prefix] of [
+  ["::", 128],
+  ["::1", 128],
+  ["::ffff:0:0", 96],
+  ["64:ff9b::", 96],
+  ["64:ff9b:1::", 48],
+  ["100::", 64],
+  ["2001::", 23],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["3fff::", 20],
+  ["5f00::", 16],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8]
+] as const) {
+  BLOCKED_ADDRESSES.addSubnet(network, prefix, "ipv6");
+}
 
 const isBlockedAddress = (address: string) => {
   const ipVersion = isIP(address);
   if (ipVersion === 4) {
-    return isBlockedIPv4(address);
+    return BLOCKED_ADDRESSES.check(address, "ipv4");
   }
 
   if (ipVersion === 6) {
-    return isBlockedIPv6(address);
+    return BLOCKED_ADDRESSES.check(address, "ipv6");
   }
 
   return true;

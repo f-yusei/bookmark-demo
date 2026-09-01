@@ -156,6 +156,19 @@ h1 {
   border-radius: 8px;
 }
 
+.bookmark-item:has(.bookmark-thumb) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.bookmark-thumb {
+  width: 120px;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
 .edit-form {
   grid-column: 1 / -1;
 }
@@ -346,6 +359,11 @@ h1 {
 
   .bookmark-item {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bookmark-thumb {
+    width: 80px;
+    height: 60px;
   }
 
   .icon-actions {

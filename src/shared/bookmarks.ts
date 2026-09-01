@@ -4,6 +4,7 @@ export type Bookmark = {
   title: string;
   tags: string;
   memo: string;
+  ogpImageUrl: string;
   createdAt: string;
   updatedAt: string;
 };
